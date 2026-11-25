@@ -61,6 +61,7 @@ const CSS = `
   .legend span.item[hidden] { display: none; }
   .pill { display: inline-block; width: 4px; height: 13px; border-radius: 2px; }
   .pill.usage { background: var(--line-usage); }
+  .pill.estimated { width: 13px; height: 0; border-top: 2px dotted var(--line-usage); border-radius: 0; }
   .pill.forecast { background: var(--line-amber); }
   .pill.limit { background: var(--secondary-text-color); opacity: .7; }
   .empty { padding: 18px 4px; color: var(--secondary-text-color); font-size: 14px; }
@@ -413,6 +414,7 @@ class UsageMeterCard extends HTMLElement {
     refs.rate.hidden = !refs.rate.textContent;
     // No forecast series means no legend entry for it either.
     refs.legendForecast.hidden = !(info && info.projected !== null);
+    refs.legendEstimated.hidden = !(window && info && this._estimatedHistory(window, info.now).length);
 
     // Rebuild only the drawing, and only when something about it changed: the
     // chart box has a fixed height, so swapping its contents cannot make the
@@ -420,6 +422,8 @@ class UsageMeterCard extends HTMLElement {
     const last = (this._points && this._points.length) ? this._points[this._points.length - 1] : null;
     const signature = [
       this._points ? this._points.length : -1,
+      this._points?.[0]?.[0] ?? "",
+      this._points?.[0]?.[1] ?? "",
       last ? last[0] : "",
       last ? last[1] : "",
       window ? window.start : "",
@@ -447,6 +451,7 @@ class UsageMeterCard extends HTMLElement {
           <span class="rate"></span>
           <span class="legend">
             <span class="item"><span class="pill usage"></span>Usage</span>
+            <span class="item estimated" hidden><span class="pill estimated"></span>Estimated history</span>
             <span class="item forecast"><span class="pill forecast"></span>Forecast</span>
             <span class="item"><span class="pill limit"></span>Limit</span>
           </span>
@@ -461,6 +466,7 @@ class UsageMeterCard extends HTMLElement {
       chart: pick(".chart"),
       rate: pick(".rate"),
       legendForecast: pick(".legend .item.forecast"),
+      legendEstimated: pick(".legend .item.estimated"),
     };
     return this._refs;
   }
@@ -483,6 +489,30 @@ class UsageMeterCard extends HTMLElement {
     // value of the first day, leaving the start of a young window empty.
     if (points[0][0] < daily[0][0]) daily.unshift(points[0]);
     return daily;
+  }
+
+  /* Visual-only estimate between the window start and its first recorded
+     point. Anchoring to that point gives a continuous join; it is not a claim
+     that the user's real usage followed this curve. Never save these values. */
+  _estimatedHistory(window, now) {
+    const first = (this._points || [])
+      .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v)
+        && t > window.start && t <= Math.min(now, window.end) && v >= 0 && v <= 100)
+      .sort((a, b) => a[0] - b[0])[0];
+    if (!first || first[0] - window.start < 5 * 60 * 1000) return [];
+    const gap = first[0] - window.start;
+    const count = Math.max(4, Math.min(32, Math.ceil(gap / 86400000)));
+    const points = [];
+    for (let i = 0; i <= count; i += 1) {
+      const f = i / count;
+      // A fixed, bounded wobble: zero at either end and small enough to
+      // preserve a nondecreasing trajectory. It never flickers on refresh.
+      const variation = 0.04 * Math.sin(2 * Math.PI * f);
+      points.push([window.start + gap * f, first[1] * (f + variation)]);
+    }
+    points[0] = [window.start, 0];
+    points[points.length - 1] = [...first];
+    return points;
   }
 
   /* Monotone cubic interpolation (Fritsch–Carlson) through the samples, in
@@ -575,13 +605,8 @@ class UsageMeterCard extends HTMLElement {
     if (window.end - window.start > 2 * 86400000) {
       points = this._dailyPoints(points);
     }
-    // A window that starts genuinely empty can be anchored at zero; a rolling
-    // window keeps its usage while the start moves, and anchoring there would
-    // invent a drop that never happened.
-    if (points.length && points[0][1] <= 10
-        && points[0][0] - window.start <= 36 * 3600 * 1000) {
-      points.unshift([window.start, 0]);
-    }
+    // Keep estimates separate from recorder data and from the solid line.
+    const estimated = this._estimatedHistory(window, info.now);
     if (points.length && points[points.length - 1][0] < info.now) {
       points.push([info.now, info.percent]);
     }
@@ -595,6 +620,20 @@ class UsageMeterCard extends HTMLElement {
       : "";
     const usageFill = usageArea
       ? `<path d="${usageArea}" fill="var(--line-usage)" fill-opacity="0.12"/>`
+      : "";
+    const estimatePixels = estimated.map(([t, v]) => [x(t), y(v)]);
+    const estimatePath = this._smoothPath(estimatePixels);
+    const estimateFill = estimatePixels.length > 1
+      ? (() => {
+        const area = `${estimatePath} L${estimatePixels[estimatePixels.length - 1][0].toFixed(1)},${y(0).toFixed(1)}`
+          + ` L${estimatePixels[0][0].toFixed(1)},${y(0).toFixed(1)} Z`;
+        return `<path d="${area}" fill="var(--line-usage)" fill-opacity="0.05"/>
+          <path d="${area}" fill="url(#estimated-usage-hatch)" opacity="0.55"/>`;
+      })()
+      : "";
+    const estimateLine = estimatePixels.length > 1
+      ? `<path d="${estimatePath}" fill="none" stroke="var(--line-usage)"
+           stroke-width="2" stroke-dasharray="2 4" stroke-linecap="round"/>`
       : "";
     const usage = points.length
       ? `<path d="${usagePath}" fill="none" stroke="var(--line-usage)"
@@ -634,6 +673,9 @@ class UsageMeterCard extends HTMLElement {
       }
     }
 
+    // A vertical guide separates elapsed usage from the forecast.
+    const nowGuide = `<line x1="${xNow}" y1="${pad.t}" x2="${xNow}" y2="${pad.t + innerH}"
+      stroke="var(--line-usage)" stroke-width="1" stroke-dasharray="4 4" opacity="0.55"/>`;
     // markers: now (green), limit crossing and window end (amber)
     const dots = [`<circle cx="${xNow}" cy="${y(info.percent)}" r="4"
       fill="var(--line-usage)" stroke="var(--card-background-color)" stroke-width="2"/>`];
@@ -654,6 +696,11 @@ class UsageMeterCard extends HTMLElement {
     return `<svg viewBox="0 0 ${width} ${height}" height="${height}" preserveAspectRatio="none"
         xmlns="http://www.w3.org/2000/svg">
       <defs>
+        <pattern id="estimated-usage-hatch" width="7" height="7" patternTransform="rotate(45)"
+          patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="7" stroke="var(--line-usage)"
+            stroke-width="1.2" opacity="0.32"/>
+        </pattern>
         <pattern id="usage-hatch" width="7" height="7" patternTransform="rotate(45)"
           patternUnits="userSpaceOnUse">
           <line x1="0" y1="0" x2="0" y2="7" stroke="var(--line-amber)"
@@ -661,12 +708,15 @@ class UsageMeterCard extends HTMLElement {
         </pattern>
       </defs>
       ${grid.join("")}
+      ${estimateFill}
       ${usageFill}
       ${hatch}
       ${pace}
       ${forecast}
       ${overLimit}
+      ${estimateLine}
       ${usage}
+      ${nowGuide}
       ${dots.join("")}
     </svg>`;
   }

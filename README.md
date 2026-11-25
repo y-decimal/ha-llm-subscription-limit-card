@@ -26,6 +26,13 @@ It uses recorder history/statistics when available. Forecasts are linear
 estimates, not provider predictions, and monthly start dates may be estimates.
 The five-hour window does not show a forecast.
 
+When recorded data starts after the beginning of the window, the card draws a
+dotted green **Estimated history** line and a faint, hatched shaded area up to the first
+recorded reading. The curve assumes a zero start and an average pace to that
+first value, with small repeatable variations. It is illustrative, not a
+reconstruction of actual usage; it does not fill internal gaps or write any
+history or statistics. No estimate is drawn without a recorded point.
+
 This is a new card type (`custom:llm-subscription-limit-card`), distinct from
 the older local `custom:usage-meter-card`, so existing dashboards remain
 unchanged and both can be loaded together.
