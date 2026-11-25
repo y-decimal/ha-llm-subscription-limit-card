@@ -584,9 +584,11 @@ class UsageMeterCard extends HTMLElement {
         fill="var(--secondary-text-color)">${v}%</text>`);
     }
 
-    // 100 % allowance guide
-    grid.push(`<line x1="${pad.l}" y1="${y(100)}" x2="${width - pad.r}" y2="${y(100)}"
-      stroke="var(--secondary-text-color)" stroke-width="1" stroke-dasharray="5 5" opacity="0.65"/>`);
+    // The 100% threshold only needs a separate guide above the normal scale.
+    if (yMax > 100) {
+      grid.push(`<line x1="${pad.l}" y1="${y(100)}" x2="${width - pad.r}" y2="${y(100)}"
+        stroke="var(--secondary-text-color)" stroke-width="1" stroke-dasharray="5 5" opacity="0.65"/>`);
+    }
 
     // x labels: start, thirds, end. A window shorter than two days gets clock
     // times — four identical dates say nothing.
