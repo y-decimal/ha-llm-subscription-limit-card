@@ -39,3 +39,9 @@ subtitle: OpenCode Go
 
 The refresh badge from the original local card is not part of this package.
 The visual editor and installation must be tested in a running Home Assistant.
+
+## Icon
+
+The icon is the `chart-donut` glyph from [Material Design Icons](https://pictogrammers.com/library/mdi/icon/chart-donut/)
+(Pictogrammers), Apache-2.0 — see [LICENSES/MDI-Apache-2.0.txt](LICENSES/MDI-Apache-2.0.txt).
+It matches the glyph the companion integration's sensors use.
