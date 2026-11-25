@@ -1,0 +1,5 @@
+{
+  "name": "LLM Subscription Limit Card",
+  "filename": "ha-llm-subscription-limit-card.js",
+  "homeassistant": "2026.11.0"
+}
