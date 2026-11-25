@@ -1,5 +1,7 @@
 # LLM Subscription Limit Card
 
+[![Open in Home Assistant Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=y-decimal&repository=ha-llm-subscription-limit-card&category=plugin)
+
 An experimental Home Assistant dashboard card for subscription usage, history
 and estimated forecasts. It is designed for the companion
 [LLM Subscription Limits integration](https://github.com/y-decimal/ha-llm-subscription-limit-integration).
