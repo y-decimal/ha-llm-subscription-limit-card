@@ -67,38 +67,33 @@ const Badge = registry.get("llm-subscription-refresh-badge");
 assert.ok(Badge, "refresh badge element must be registered");
 assert.equal(
   JSON.stringify(Array.from(Badge.getConfigForm().schema, (field) => field.name)),
-  '["entity","interval_entity","refresh_entity","refresh_seconds","targets"]'
+  '["entity","refresh_entity"]'
 );
-assert.equal(Badge.getStubConfig(hass, ["sensor.go"], []).entity, "sensor.go");
 assert.equal(context.window.customCards[1].type, "llm-subscription-refresh-badge");
+
 const badge = Object.create(Badge.prototype);
-badge.config = { entity: "sensor.go", refresh_seconds: 300 };
-assert.equal(JSON.stringify(badge.targets), '["sensor.go"]', "targets default to the anchor entity");
-badge.config = { entity: "sensor.go", targets: ["sensor.a", "sensor.b"] };
-assert.equal(JSON.stringify(badge.targets), '["sensor.a","sensor.b"]');
-badge._hass = {
-  states: {
-    "sensor.go": { state: "37", attributes: {}, last_reported: "2026-11-26T00:00:00Z" },
-    "number.poll": { state: "7", attributes: {} },
-  },
-};
-badge.config = { entity: "sensor.go", interval_entity: "number.poll", refresh_seconds: 300 };
-assert.equal(badge._intervalMs(), 7 * 60000, "interval entity wins over the fallback");
-badge.config = { entity: "sensor.go", refresh_seconds: 90 };
-badge._hass.states["sensor.go"].attributes = { scan_interval: 120 };
-assert.equal(badge._intervalMs(), 120000, "scan_interval attribute is used next");
-badge._hass.states["sensor.go"].attributes = {};
-badge._samples = [300000, 300000, 420000];
-assert.equal(badge._intervalMs(), 300000, "observed polls are the median of the samples");
-badge._samples = [];
-assert.equal(badge._intervalMs(), 90000, "fallback interval is honoured");
-badge.config = {
-  entity: "sensor.go",
-  targets: ["sensor.a"],
-};
-badge.config.refresh_entity = "button.refresh";
-assert.equal(badge.targets.length, 1);
-assert.equal(badge._ago(30 * 1000), "less than a minute");
-assert.equal(badge._ago(3 * 60000), "3 min");
-assert.equal(badge._ago(2 * 3600000), "2 h");
+badge.shadowRoot = { innerHTML: "" };
+assert.throws(() => badge.setConfig({}), /entity/);
+assert.throws(() => badge.setConfig({ entity: "sensor.next" }), /refresh_entity/);
+
+const due = new Date(Date.now() + 90 * 1000).toISOString();
+badge.setConfig({ entity: "sensor.next", refresh_entity: "button.refresh" });
+badge._hass = { states: { "sensor.next": { state: due, attributes: {} } } };
+assert.match(badge._status(), /^Refreshing in 1:[0-9]{2}$/);
+badge._hass = { states: { "sensor.next": { state: "unavailable", attributes: {} } } };
+assert.equal(badge._status(), "Waiting for the first poll");
+badge._hass = { states: {} };
+assert.equal(badge._status(), "Next refresh sensor not found");
+badge._hass = { states: { "sensor.next": { state: new Date(Date.now() - 5000).toISOString(), attributes: {} } } };
+assert.equal(badge._status(), "Due now");
+badge._pending = true;
+assert.equal(badge._status(), "Refreshing…");
+
+// A changed timestamp ends the pending state without any timer.
+badge._hass = { states: { "sensor.next": { state: due, attributes: {} } } };
+badge._pending = true;
+const set = Object.getOwnPropertyDescriptor(Badge.prototype, "hass").set;
+set.call(badge, { states: { "sensor.next": { state: new Date(Date.now() + 60 * 1000).toISOString(), attributes: {} } } });
+assert.equal(badge._pending, false);
+
 console.log("Card registration and visual form smoke tests passed");

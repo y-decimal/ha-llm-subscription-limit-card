@@ -48,42 +48,28 @@ subtitle: OpenCode Go
 
 ## Refresh badge
 
-The package also provides `custom:llm-subscription-refresh-badge`, a small pill
-showing when the sensors poll next. Clicking it refreshes them: it presses a
-button entity if one is configured, otherwise it sends
-`homeassistant.update_entity` to the targets.
-
-The countdown interval is **read, never duplicated**: the badge prefers a number
-entity (the companion integration's poll interval), then a `scan_interval`
-attribute on the anchor, then the spacing it actually observed between polls.
-`refresh_seconds` is only a fallback for sensors that expose none of those.
+`custom:llm-subscription-refresh-badge` counts down to the next poll and
+refreshes on click. It is deliberately thin: the integration owns both the
+schedule and the action, so the badge only reads a timestamp and presses a
+button. Both fields are required, and there is nothing to configure twice.
 
 ```yaml
 type: custom:llm-subscription-refresh-badge
-entity: sensor.example_monthly_usage            # anchor: its last update sets the clock
-interval_entity: number.llm_subscription_limits_poll_interval
+entity: sensor.llm_subscription_limits_next_refresh   # timestamp sensor
 refresh_entity: button.llm_subscription_limits_refresh_now
 ```
 
-Without those entities, the older form still works:
+What it shows:
 
-```yaml
-type: custom:llm-subscription-refresh-badge
-entity: sensor.example_monthly_usage
-refresh_seconds: 300
-targets:
-  - sensor.example_5h_usage
-  - sensor.example_weekly_usage
-  - sensor.example_monthly_usage
-```
+- `Refreshing in m:ss` — counting down to the timestamp.
+- `Refreshing…` — only after a click, until the timestamp moves.
+- `Due now` — the timestamp has passed and the poll has not landed yet.
+- `Waiting for the first poll` — the sensor has no timestamp yet.
+- `Next refresh sensor not found` — wrong entity configured.
 
-When the anchor is overdue it reads `Last poll 3 min ago` instead of claiming a
-refresh is in progress; `Refreshing…` is reserved for a click or a refresh that
-is genuinely outstanding. Place it in a view's `footer` to keep it visible while
-scrolling. The anchor must be a sensor that reports `last_updated`/`last_reported`
-on every poll; one whose state and attributes never change is not usable.
-
-The visual editor and installation must be tested in a running Home Assistant.
+Place it in a view's `footer` to keep it visible while scrolling. With the
+companion integration it needs no polling interval and no target list: changing
+the integration's poll interval changes this countdown automatically.
 
 ## Icon
 

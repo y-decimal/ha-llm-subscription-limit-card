@@ -734,50 +734,41 @@ class UsageMeterCard extends HTMLElement {
 
 customElements.define("llm-subscription-limit-card", UsageMeterCard);
 
-/* A small footer card showing when the usage sensors poll next. Clicking it
-   asks Home Assistant to poll them immediately; the entities are coordinator
-   backed, so update_entity really does fetch fresh numbers. */
+/* Counts down to the integration's next poll.
+
+   Deliberately dumb: the integration owns the schedule (it exposes a
+   "Next refresh" timestamp sensor) and the refresh action (a button). This card
+   only renders the difference and presses the button, so there is one source of
+   truth and nothing to configure twice. */
 class SubscriptionRefreshBadge extends HTMLElement {
   static getStubConfig(hass, entities = [], entitiesFallback = []) {
-    const suitable = [...entities, ...entitiesFallback].find((id) =>
-      id.startsWith("sensor.") && hass?.states?.[id]?.attributes?.resets_at
+    const stamps = (id) => hass?.states?.[id]?.attributes?.device_class === "timestamp";
+    const sensor = [...entities, ...entitiesFallback].find(
+      (id) => id.startsWith("sensor.") && stamps(id)
     );
-    return { entity: suitable || "sensor.select_usage_sensor", refresh_seconds: 300 };
+    const button = [...entities, ...entitiesFallback].find((id) => id.startsWith("button."));
+    return { entity: sensor || "sensor.select_next_refresh", refresh_entity: button || "button.select_refresh_now" };
   }
 
   static getConfigForm() {
     return {
       schema: [
-        { name: "entity", required: true, selector: { entity: { domain: "sensor" } } },
-        { name: "interval_entity", selector: { entity: { domain: "number" } } },
-        { name: "refresh_entity", selector: { entity: { domain: "button" } } },
         {
-          name: "refresh_seconds",
-          selector: { number: { min: 30, max: 3600, step: 30, mode: "box", unit_of_measurement: "s" } },
-          default: 300,
+          name: "entity",
+          required: true,
+          selector: { entity: { domain: "sensor", device_class: "timestamp" } },
         },
-        { name: "targets", selector: { entity: { domain: "sensor", multiple: true } } },
+        { name: "refresh_entity", required: true, selector: { entity: { domain: "button" } } },
       ],
       computeLabel: (field) => ({
-        entity: "Anchor sensor",
-        interval_entity: "Poll interval entity",
+        entity: "Next refresh sensor",
         refresh_entity: "Refresh button",
-        refresh_seconds: "Fallback interval",
-        targets: "Sensors to refresh",
       })[field.name],
       computeHelper: (field) => {
-        switch (field.name) {
-          case "entity":
-            return "Any usage sensor; its last update sets the countdown.";
-          case "interval_entity":
-            return "Optional. A number entity in minutes; overrides the fallback interval.";
-          case "refresh_entity":
-            return "Optional. A button that is pressed instead of updating sensors directly.";
-          case "refresh_seconds":
-            return "Only used until the interval can be read or measured.";
-          default:
-            return field.name === "targets" ? "Used when no refresh button is set." : undefined;
+        if (field.name === "entity") {
+          return "A timestamp sensor for when the next poll is due.";
         }
+        return field.name === "refresh_entity" ? "Pressed when the badge is clicked." : undefined;
       },
     };
   }
@@ -789,58 +780,29 @@ class SubscriptionRefreshBadge extends HTMLElement {
 
   setConfig(config) {
     if (!config || !config.entity) {
-      throw new Error("llm-subscription-refresh-badge: 'entity' is required");
+      throw new Error(
+        "llm-subscription-refresh-badge: 'entity' (next refresh timestamp sensor) is required"
+      );
     }
-    this.config = { refresh_seconds: 300, ...config };
-    this._pendingUntil = 0;
-    this._samples = [];
-    this._lastReported = NaN;
+    if (!config.refresh_entity) {
+      throw new Error(
+        "llm-subscription-refresh-badge: 'refresh_entity' (button) is required"
+      );
+    }
+    this.config = { ...config };
+    this._pending = false;
     this._render();
   }
 
   set hass(hass) {
+    const previous = this._hass?.states?.[this.config.entity]?.state;
     this._hass = hass;
-    this._observePoll();
+    const current = hass.states[this.config.entity]?.state;
+    // A new timestamp means the poll landed: stop claiming a refresh is running.
+    if (this._pending && current !== previous) {
+      this._pending = false;
+    }
     this._render();
-  }
-
-  /* The interval is read, not trusted: the integration's number entity wins,
-     then a scan_interval attribute, then the spacing actually observed between
-     polls. Config only supplies a fallback. */
-  _intervalMs() {
-    const states = this._hass?.states || {};
-    const fromEntity = Number(states[this.config.interval_entity]?.state);
-    if (Number.isFinite(fromEntity) && fromEntity > 0) return fromEntity * 60000;
-    const fromAttr = Number(states[this.config.entity]?.attributes?.scan_interval);
-    if (Number.isFinite(fromAttr) && fromAttr > 0) return fromAttr * 1000;
-    if (this._samples.length) {
-      const sorted = [...this._samples].sort((a, b) => a - b);
-      return sorted[Math.floor(sorted.length / 2)];
-    }
-    return (Number(this.config.refresh_seconds) || 300) * 1000;
-  }
-
-  _observePoll() {
-    const state = this._hass?.states?.[this.config.entity];
-    const reported = Date.parse(state?.last_reported || state?.last_updated || "");
-    if (!Number.isFinite(reported) || reported === this._lastReported) return;
-    if (Number.isFinite(this._lastReported)) {
-      const delta = reported - this._lastReported;
-      // Ignore click-driven polls and gaps too large to be a cadence.
-      if (delta > 15000 && delta < 2 * 3600000) {
-        this._samples.push(delta);
-        if (this._samples.length > 3) this._samples.shift();
-      }
-    }
-    this._lastReported = reported;
-    this._maybeClearPending(reported);
-  }
-
-  _maybeClearPending(reported) {
-    if (this._pendingSince && reported > this._pendingSince) {
-      this._pendingUntil = 0;
-      this._pendingSince = 0;
-    }
   }
 
   connectedCallback() {
@@ -855,53 +817,38 @@ class SubscriptionRefreshBadge extends HTMLElement {
     clearInterval(this._timer);
   }
 
-  get targets() {
-    const configured = Array.isArray(this.config?.targets) ? this.config.targets : [];
-    return configured.length ? configured : [this.config.entity];
-  }
-
   async _refreshNow() {
     if (!this._hass) return;
-    this._pendingSince = Number.isFinite(this._lastReported) ? this._lastReported : 0;
-    this._pendingUntil = Date.now() + 15000;
+    this._pending = true;
     this._render();
-    const service = this.config.refresh_entity
-      ? { domain: "button", name: "press", entity_id: this.config.refresh_entity }
-      : { domain: "homeassistant", name: "update_entity", entity_id: this.targets };
     try {
-      await this._hass.callService(service.domain, service.name, {
-        entity_id: service.entity_id,
+      await this._hass.callService("button", "press", {
+        entity_id: this.config.refresh_entity,
       });
     } catch (error) {
-      this._pendingUntil = 0;
+      this._pending = false;
       this._render();
+      throw error;
     }
+  }
+
+  _status() {
+    const state = this._hass?.states?.[this.config.entity];
+    if (!state) return "Next refresh sensor not found";
+    const due = Date.parse(state.state);
+    if (!Number.isFinite(due)) return "Waiting for the first poll";
+    const left = due - Date.now();
+    if (left > 0) {
+      const minutes = Math.floor(left / 60000);
+      const seconds = Math.floor((left % 60000) / 1000);
+      return `Refreshing in ${minutes}:${String(seconds).padStart(2, "0")}`;
+    }
+    return this._pending ? "Refreshing…" : "Due now";
   }
 
   _render() {
     if (!this.config) return;
-    const state = this._hass?.states?.[this.config.entity];
-    // last_updated only moves when state or attributes change, and last_reported
-    // is skipped for identical writes — whichever is later anchors the countdown.
-    const stamps = [Date.parse(state?.last_updated || ""), Date.parse(state?.last_reported || "")]
-      .filter((value) => Number.isFinite(value));
-    const polledAt = stamps.length ? Math.max(...stamps) : NaN;
-    const interval = this._intervalMs();
-    let text = "Waiting for the first poll";
-    if (Number.isFinite(polledAt)) {
-      const left = polledAt + interval - Date.now();
-      if (left > 0) {
-        const minutes = Math.floor(left / 60000);
-        const seconds = Math.floor((left % 60000) / 1000);
-        text = `Refreshing in ${minutes}:${String(seconds).padStart(2, "0")}`;
-      } else {
-        // Overdue is a fact, not a reason to pretend a refresh is running.
-        text = `Last poll ${this._ago(Date.now() - polledAt)} ago`;
-      }
-    }
-    if (Date.now() < (this._pendingUntil || 0)) {
-      text = "Refreshing…";
-    }
+    const text = this._status();
     const html = `
       <style>
         :host { display: block; cursor: pointer; }
@@ -923,14 +870,6 @@ class SubscriptionRefreshBadge extends HTMLElement {
       this._html = html;
       this.shadowRoot.innerHTML = html;
     }
-  }
-
-  _ago(ms) {
-    const minutes = Math.floor(ms / 60000);
-    if (minutes < 1) return "less than a minute";
-    if (minutes < 60) return `${minutes} min`;
-    const hours = Math.floor(minutes / 60);
-    return `${hours} h`;
   }
 }
 
