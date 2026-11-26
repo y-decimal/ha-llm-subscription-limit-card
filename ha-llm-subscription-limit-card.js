@@ -234,6 +234,7 @@ class UsageMeterCard extends HTMLElement {
   async _fetch(window) {
     this._fetching = true;
     let points = [];
+    let source = "statistics";
     if (!this._isShort(window)) {
       try {
         points = await this._statistics(window);
@@ -242,6 +243,7 @@ class UsageMeterCard extends HTMLElement {
       }
     }
     if (points.length < 2) {
+      source = "history";
       try {
         points = await this._history(window);
       } catch (error) {
@@ -249,6 +251,7 @@ class UsageMeterCard extends HTMLElement {
       }
     }
     this._points = points;
+    this._pointsSource = source;
     this._fetching = false;
     this._render();
   }
@@ -422,6 +425,7 @@ class UsageMeterCard extends HTMLElement {
     const last = (this._points && this._points.length) ? this._points[this._points.length - 1] : null;
     const signature = [
       this._points ? this._points.length : -1,
+      this._pointsSource ?? "",
       this._points?.[0]?.[0] ?? "",
       this._points?.[0]?.[1] ?? "",
       last ? last[0] : "",
@@ -497,10 +501,14 @@ class UsageMeterCard extends HTMLElement {
   _estimatedHistory(window, now) {
     const first = (this._points || [])
       .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v)
-        && t > window.start && t <= Math.min(now, window.end) && v >= 0 && v <= 100)
+        && t >= window.start && t <= Math.min(now, window.end) && v >= 0 && v <= 100)
       .sort((a, b) => a[0] - b[0])[0];
-    if (!first || first[0] - window.start < 5 * 60 * 1000) return [];
+    if (!first) return [];
     const gap = first[0] - window.start;
+    // Hourly buckets cannot prove a gap smaller than their own resolution.
+    // Raw history remains subject to the existing five-minute threshold.
+    const threshold = this._pointsSource === "statistics" ? 60 * 60 * 1000 : 5 * 60 * 1000;
+    if (gap < threshold) return [];
     const count = Math.max(4, Math.min(32, Math.ceil(gap / 86400000)));
     const points = [];
     for (let i = 0; i <= count; i += 1) {

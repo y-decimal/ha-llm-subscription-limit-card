@@ -32,6 +32,8 @@ recorded reading. The curve assumes a zero start and an average pace to that
 first value, with small repeatable variations. It is illustrative, not a
 reconstruction of actual usage; it does not fill internal gaps or write any
 history or statistics. No estimate is drawn without a recorded point.
+For hourly statistics, gaps shorter than one hour cannot be distinguished from
+bucket alignment and are not estimated; raw history uses a five-minute cutoff.
 
 This is a new card type (`custom:llm-subscription-limit-card`), distinct from
 the older local `custom:usage-meter-card`, so existing dashboards remain

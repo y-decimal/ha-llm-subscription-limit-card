@@ -38,6 +38,20 @@ card._points = [];
 assert.equal(card._estimatedHistory(window, window.start + 6 * day).length, 0);
 card._points = [[window.start + 60 * 1000, 5]];
 assert.equal(card._estimatedHistory(window, window.start + 6 * day).length, 0);
+card._pointsSource = "statistics";
+card._points = [[window.start, 0], [window.start + 3600000, 3]];
+assert.equal(card._estimatedHistory(window, window.start + 6 * day).length, 0,
+  "a statistics bucket exactly at the window start is recorded history");
+card._points = [[window.start + 40 * 60000, 5]];
+assert.equal(card._estimatedHistory(window, window.start + 6 * day).length, 0,
+  "an hourly bucket less than one hour after start does not establish a gap");
+card._points = [[window.start + 3600000, 5]];
+assert.ok(card._estimatedHistory(window, window.start + 6 * day).length,
+  "a full missing hourly bucket remains estimated");
+card._pointsSource = "history";
+card._points = [[window.start + 40 * 60000, 5]];
+assert.ok(card._estimatedHistory(window, window.start + 6 * day).length,
+  "hourly statistics tolerance must not suppress a raw-history gap");
 card._points = [[window.start + 4 * day, 32], [window.start + 5 * day, 40]];
 card.clientWidth = 500;
 const svg = card._svg({ percent: 40, projected: null, now: window.start + 6 * day }, window);
