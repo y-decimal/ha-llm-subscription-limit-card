@@ -88,6 +88,9 @@ badge._hass = { states: { "sensor.next": { state: new Date(Date.now() - 5000).to
 assert.equal(badge._status(), "Due now");
 badge._pending = true;
 assert.equal(badge._status(), "Refreshing…");
+badge._refreshedUntil = Date.now() + 1000;
+assert.equal(badge._status(), "Refreshed", "confirmation wins over the countdown");
+badge._refreshedUntil = 0;
 
 // A changed timestamp ends the pending state without any timer.
 badge._hass = { states: { "sensor.next": { state: due, attributes: {} } } };
@@ -95,5 +98,6 @@ badge._pending = true;
 const set = Object.getOwnPropertyDescriptor(Badge.prototype, "hass").set;
 set.call(badge, { states: { "sensor.next": { state: new Date(Date.now() + 60 * 1000).toISOString(), attributes: {} } } });
 assert.equal(badge._pending, false);
+assert.ok(badge._refreshedUntil > Date.now(), "a landed poll shows the confirmation");
 
 console.log("Card registration and visual form smoke tests passed");

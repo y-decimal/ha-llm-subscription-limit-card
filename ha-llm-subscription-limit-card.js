@@ -740,6 +740,8 @@ customElements.define("llm-subscription-limit-card", UsageMeterCard);
    "Next refresh" timestamp sensor) and the refresh action (a button). This card
    only renders the difference and presses the button, so there is one source of
    truth and nothing to configure twice. */
+const REFRESHED_MS = 1800;
+
 class SubscriptionRefreshBadge extends HTMLElement {
   static getStubConfig(hass, entities = [], entitiesFallback = []) {
     const stamps = (id) => hass?.states?.[id]?.attributes?.device_class === "timestamp";
@@ -791,6 +793,8 @@ class SubscriptionRefreshBadge extends HTMLElement {
     }
     this.config = { ...config };
     this._pending = false;
+    this._pendingSince = 0;
+    this._refreshedUntil = 0;
     this._render();
   }
 
@@ -798,15 +802,17 @@ class SubscriptionRefreshBadge extends HTMLElement {
     const previous = this._hass?.states?.[this.config.entity]?.state;
     this._hass = hass;
     const current = hass.states[this.config.entity]?.state;
-    // A new timestamp means the poll landed: stop claiming a refresh is running.
+    // A new timestamp means the poll landed: confirm it briefly, then count down.
     if (this._pending && current !== previous) {
       this._pending = false;
+      this._refreshedUntil = Date.now() + REFRESHED_MS;
     }
     this._render();
   }
 
   connectedCallback() {
-    this._timer = setInterval(() => this._render(), 1000);
+    // Fast enough to catch the confirmation window; identical renders are skipped.
+    this._timer = setInterval(() => this._render(), 500);
     if (!this._clickBound) {
       this._clickBound = true;
       this.addEventListener("click", () => this._refreshNow());
@@ -820,6 +826,7 @@ class SubscriptionRefreshBadge extends HTMLElement {
   async _refreshNow() {
     if (!this._hass) return;
     this._pending = true;
+    this._pendingSince = Date.now();
     this._render();
     try {
       await this._hass.callService("button", "press", {
@@ -833,6 +840,7 @@ class SubscriptionRefreshBadge extends HTMLElement {
   }
 
   _status() {
+    if (Date.now() < (this._refreshedUntil || 0)) return "Refreshed";
     const state = this._hass?.states?.[this.config.entity];
     if (!state) return "Next refresh sensor not found";
     const due = Date.parse(state.state);
@@ -848,6 +856,11 @@ class SubscriptionRefreshBadge extends HTMLElement {
 
   _render() {
     if (!this.config) return;
+    // Give up waiting if a press never produced a new timestamp.
+    if (this._pending && Date.now() - (this._pendingSince || 0) > 30000) {
+      this._pending = false;
+    }
+    const confirming = Date.now() < (this._refreshedUntil || 0);
     const text = this._status();
     const html = `
       <style>
@@ -864,8 +877,18 @@ class SubscriptionRefreshBadge extends HTMLElement {
                   backdrop-filter: blur(6px); }
         .dot { width: 7px; height: 7px; border-radius: 50%;
                background: var(--line-amber, #f0b429); opacity: .8; }
+        .dot.ok { background: var(--success-color, #43a047); opacity: 1; }
+        /* A short, obvious acknowledgement that the press did something. */
+        @keyframes badge-pop {
+          0% { transform: scale(.82); opacity: 0; }
+          60% { transform: scale(1.08); opacity: 1; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .label { display: inline-block; }
+        .label.ok { color: var(--success-color, #43a047); font-weight: 600;
+                    animation: badge-pop 280ms ease-out; }
       </style>
-      <ha-card title="Click to refresh now"><span class="dot"></span><span>${text}</span></ha-card>`;
+      <ha-card title="Click to refresh now"><span class="dot${confirming ? " ok" : ""}"></span><span class="label${confirming ? " ok" : ""}">${text}</span></ha-card>`;
     if (html !== this._html) {
       this._html = html;
       this.shadowRoot.innerHTML = html;

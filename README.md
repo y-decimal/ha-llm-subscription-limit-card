@@ -62,7 +62,9 @@ refresh_entity: button.llm_subscription_limits_refresh_now
 What it shows:
 
 - `Refreshing in m:ss` — counting down to the timestamp.
-- `Refreshing…` — only after a click, until the timestamp moves.
+- `Refreshed` — shown for about two seconds after a click, with a green dot and
+  a short pop, so the press has visible feedback.
+- `Refreshing…` — while a click's poll is still outstanding.
 - `Due now` — the timestamp has passed and the poll has not landed yet.
 - `Waiting for the first poll` — the sensor has no timestamp yet.
 - `Next refresh sensor not found` — wrong entity configured.
