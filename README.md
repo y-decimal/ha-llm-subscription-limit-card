@@ -49,23 +49,39 @@ subtitle: OpenCode Go
 ## Refresh badge
 
 The package also provides `custom:llm-subscription-refresh-badge`, a small pill
-showing when the sensors poll next. Clicking it asks Home Assistant to poll the
-targets immediately (`homeassistant.update_entity`), which refreshes any
-coordinator-backed sensor. Both fields are optional:
+showing when the sensors poll next. Clicking it refreshes them: it presses a
+button entity if one is configured, otherwise it sends
+`homeassistant.update_entity` to the targets.
+
+The countdown interval is **read, never duplicated**: the badge prefers a number
+entity (the companion integration's poll interval), then a `scan_interval`
+attribute on the anchor, then the spacing it actually observed between polls.
+`refresh_seconds` is only a fallback for sensors that expose none of those.
 
 ```yaml
 type: custom:llm-subscription-refresh-badge
-entity: sensor.example_monthly_usage   # anchor: its last update sets the countdown
-refresh_seconds: 300                   # the integration's poll interval
-targets:                               # defaults to the anchor entity
+entity: sensor.example_monthly_usage            # anchor: its last update sets the clock
+interval_entity: number.llm_subscription_limits_poll_interval
+refresh_entity: button.llm_subscription_limits_refresh_now
+```
+
+Without those entities, the older form still works:
+
+```yaml
+type: custom:llm-subscription-refresh-badge
+entity: sensor.example_monthly_usage
+refresh_seconds: 300
+targets:
   - sensor.example_5h_usage
   - sensor.example_weekly_usage
   - sensor.example_monthly_usage
 ```
 
-Place it in a view's `footer` to keep it visible while scrolling. The anchor
-must be a sensor that reports `last_updated`/`last_reported` on every poll; a
-sensor whose state and attributes never change is not a usable anchor.
+When the anchor is overdue it reads `Last poll 3 min ago` instead of claiming a
+refresh is in progress; `Refreshing…` is reserved for a click or a refresh that
+is genuinely outstanding. Place it in a view's `footer` to keep it visible while
+scrolling. The anchor must be a sensor that reports `last_updated`/`last_reported`
+on every poll; one whose state and attributes never change is not usable.
 
 The visual editor and installation must be tested in a running Home Assistant.
 

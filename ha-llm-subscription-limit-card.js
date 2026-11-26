@@ -749,6 +749,8 @@ class SubscriptionRefreshBadge extends HTMLElement {
     return {
       schema: [
         { name: "entity", required: true, selector: { entity: { domain: "sensor" } } },
+        { name: "interval_entity", selector: { entity: { domain: "number" } } },
+        { name: "refresh_entity", selector: { entity: { domain: "button" } } },
         {
           name: "refresh_seconds",
           selector: { number: { min: 30, max: 3600, step: 30, mode: "box", unit_of_measurement: "s" } },
@@ -758,14 +760,24 @@ class SubscriptionRefreshBadge extends HTMLElement {
       ],
       computeLabel: (field) => ({
         entity: "Anchor sensor",
-        refresh_seconds: "Poll interval",
+        interval_entity: "Poll interval entity",
+        refresh_entity: "Refresh button",
+        refresh_seconds: "Fallback interval",
         targets: "Sensors to refresh",
       })[field.name],
       computeHelper: (field) => {
-        if (field.name === "entity") {
-          return "Any usage sensor; its last update sets the countdown.";
+        switch (field.name) {
+          case "entity":
+            return "Any usage sensor; its last update sets the countdown.";
+          case "interval_entity":
+            return "Optional. A number entity in minutes; overrides the fallback interval.";
+          case "refresh_entity":
+            return "Optional. A button that is pressed instead of updating sensors directly.";
+          case "refresh_seconds":
+            return "Only used until the interval can be read or measured.";
+          default:
+            return field.name === "targets" ? "Used when no refresh button is set." : undefined;
         }
-        return field.name === "targets" ? "Defaults to the anchor sensor." : undefined;
       },
     };
   }
@@ -781,12 +793,54 @@ class SubscriptionRefreshBadge extends HTMLElement {
     }
     this.config = { refresh_seconds: 300, ...config };
     this._pendingUntil = 0;
+    this._samples = [];
+    this._lastReported = NaN;
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._observePoll();
     this._render();
+  }
+
+  /* The interval is read, not trusted: the integration's number entity wins,
+     then a scan_interval attribute, then the spacing actually observed between
+     polls. Config only supplies a fallback. */
+  _intervalMs() {
+    const states = this._hass?.states || {};
+    const fromEntity = Number(states[this.config.interval_entity]?.state);
+    if (Number.isFinite(fromEntity) && fromEntity > 0) return fromEntity * 60000;
+    const fromAttr = Number(states[this.config.entity]?.attributes?.scan_interval);
+    if (Number.isFinite(fromAttr) && fromAttr > 0) return fromAttr * 1000;
+    if (this._samples.length) {
+      const sorted = [...this._samples].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
+    }
+    return (Number(this.config.refresh_seconds) || 300) * 1000;
+  }
+
+  _observePoll() {
+    const state = this._hass?.states?.[this.config.entity];
+    const reported = Date.parse(state?.last_reported || state?.last_updated || "");
+    if (!Number.isFinite(reported) || reported === this._lastReported) return;
+    if (Number.isFinite(this._lastReported)) {
+      const delta = reported - this._lastReported;
+      // Ignore click-driven polls and gaps too large to be a cadence.
+      if (delta > 15000 && delta < 2 * 3600000) {
+        this._samples.push(delta);
+        if (this._samples.length > 3) this._samples.shift();
+      }
+    }
+    this._lastReported = reported;
+    this._maybeClearPending(reported);
+  }
+
+  _maybeClearPending(reported) {
+    if (this._pendingSince && reported > this._pendingSince) {
+      this._pendingUntil = 0;
+      this._pendingSince = 0;
+    }
   }
 
   connectedCallback() {
@@ -808,11 +862,15 @@ class SubscriptionRefreshBadge extends HTMLElement {
 
   async _refreshNow() {
     if (!this._hass) return;
-    this._pendingUntil = Date.now() + 8000;
+    this._pendingSince = Number.isFinite(this._lastReported) ? this._lastReported : 0;
+    this._pendingUntil = Date.now() + 15000;
     this._render();
+    const service = this.config.refresh_entity
+      ? { domain: "button", name: "press", entity_id: this.config.refresh_entity }
+      : { domain: "homeassistant", name: "update_entity", entity_id: this.targets };
     try {
-      await this._hass.callService("homeassistant", "update_entity", {
-        entity_id: this.targets,
+      await this._hass.callService(service.domain, service.name, {
+        entity_id: service.entity_id,
       });
     } catch (error) {
       this._pendingUntil = 0;
@@ -828,15 +886,18 @@ class SubscriptionRefreshBadge extends HTMLElement {
     const stamps = [Date.parse(state?.last_updated || ""), Date.parse(state?.last_reported || "")]
       .filter((value) => Number.isFinite(value));
     const polledAt = stamps.length ? Math.max(...stamps) : NaN;
+    const interval = this._intervalMs();
     let text = "Waiting for the first poll";
     if (Number.isFinite(polledAt)) {
-      const interval = (Number(this.config.refresh_seconds) || 300) * 1000;
-      const left = Math.max(0, polledAt + interval - Date.now());
-      const minutes = Math.floor(left / 60000);
-      const seconds = Math.floor((left % 60000) / 1000);
-      text = left > 0
-        ? `Refreshing in ${minutes}:${String(seconds).padStart(2, "0")}`
-        : "Refreshing…";
+      const left = polledAt + interval - Date.now();
+      if (left > 0) {
+        const minutes = Math.floor(left / 60000);
+        const seconds = Math.floor((left % 60000) / 1000);
+        text = `Refreshing in ${minutes}:${String(seconds).padStart(2, "0")}`;
+      } else {
+        // Overdue is a fact, not a reason to pretend a refresh is running.
+        text = `Last poll ${this._ago(Date.now() - polledAt)} ago`;
+      }
     }
     if (Date.now() < (this._pendingUntil || 0)) {
       text = "Refreshing…";
@@ -862,6 +923,14 @@ class SubscriptionRefreshBadge extends HTMLElement {
       this._html = html;
       this.shadowRoot.innerHTML = html;
     }
+  }
+
+  _ago(ms) {
+    const minutes = Math.floor(ms / 60000);
+    if (minutes < 1) return "less than a minute";
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours} h`;
   }
 }
 
