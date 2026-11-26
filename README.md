@@ -46,7 +46,27 @@ title: Monthly
 subtitle: OpenCode Go
 ```
 
-The refresh badge from the original local card is not part of this package.
+## Refresh badge
+
+The package also provides `custom:llm-subscription-refresh-badge`, a small pill
+showing when the sensors poll next. Clicking it asks Home Assistant to poll the
+targets immediately (`homeassistant.update_entity`), which refreshes any
+coordinator-backed sensor. Both fields are optional:
+
+```yaml
+type: custom:llm-subscription-refresh-badge
+entity: sensor.example_monthly_usage   # anchor: its last update sets the countdown
+refresh_seconds: 300                   # the integration's poll interval
+targets:                               # defaults to the anchor entity
+  - sensor.example_5h_usage
+  - sensor.example_weekly_usage
+  - sensor.example_monthly_usage
+```
+
+Place it in a view's `footer` to keep it visible while scrolling. The anchor
+must be a sensor that reports `last_updated`/`last_reported` on every poll; a
+sensor whose state and attributes never change is not a usable anchor.
+
 The visual editor and installation must be tested in a running Home Assistant.
 
 ## Icon

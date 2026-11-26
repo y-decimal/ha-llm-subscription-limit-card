@@ -734,11 +734,149 @@ class UsageMeterCard extends HTMLElement {
 
 customElements.define("llm-subscription-limit-card", UsageMeterCard);
 
+/* A small footer card showing when the usage sensors poll next. Clicking it
+   asks Home Assistant to poll them immediately; the entities are coordinator
+   backed, so update_entity really does fetch fresh numbers. */
+class SubscriptionRefreshBadge extends HTMLElement {
+  static getStubConfig(hass, entities = [], entitiesFallback = []) {
+    const suitable = [...entities, ...entitiesFallback].find((id) =>
+      id.startsWith("sensor.") && hass?.states?.[id]?.attributes?.resets_at
+    );
+    return { entity: suitable || "sensor.select_usage_sensor", refresh_seconds: 300 };
+  }
+
+  static getConfigForm() {
+    return {
+      schema: [
+        { name: "entity", required: true, selector: { entity: { domain: "sensor" } } },
+        {
+          name: "refresh_seconds",
+          selector: { number: { min: 30, max: 3600, step: 30, mode: "box", unit_of_measurement: "s" } },
+          default: 300,
+        },
+        { name: "targets", selector: { entity: { domain: "sensor", multiple: true } } },
+      ],
+      computeLabel: (field) => ({
+        entity: "Anchor sensor",
+        refresh_seconds: "Poll interval",
+        targets: "Sensors to refresh",
+      })[field.name],
+      computeHelper: (field) => {
+        if (field.name === "entity") {
+          return "Any usage sensor; its last update sets the countdown.";
+        }
+        return field.name === "targets" ? "Defaults to the anchor sensor." : undefined;
+      },
+    };
+  }
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+  }
+
+  setConfig(config) {
+    if (!config || !config.entity) {
+      throw new Error("llm-subscription-refresh-badge: 'entity' is required");
+    }
+    this.config = { refresh_seconds: 300, ...config };
+    this._pendingUntil = 0;
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._render();
+  }
+
+  connectedCallback() {
+    this._timer = setInterval(() => this._render(), 1000);
+    if (!this._clickBound) {
+      this._clickBound = true;
+      this.addEventListener("click", () => this._refreshNow());
+    }
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._timer);
+  }
+
+  get targets() {
+    const configured = Array.isArray(this.config?.targets) ? this.config.targets : [];
+    return configured.length ? configured : [this.config.entity];
+  }
+
+  async _refreshNow() {
+    if (!this._hass) return;
+    this._pendingUntil = Date.now() + 8000;
+    this._render();
+    try {
+      await this._hass.callService("homeassistant", "update_entity", {
+        entity_id: this.targets,
+      });
+    } catch (error) {
+      this._pendingUntil = 0;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this.config) return;
+    const state = this._hass?.states?.[this.config.entity];
+    // last_updated only moves when state or attributes change, and last_reported
+    // is skipped for identical writes — whichever is later anchors the countdown.
+    const stamps = [Date.parse(state?.last_updated || ""), Date.parse(state?.last_reported || "")]
+      .filter((value) => Number.isFinite(value));
+    const polledAt = stamps.length ? Math.max(...stamps) : NaN;
+    let text = "Waiting for the first poll";
+    if (Number.isFinite(polledAt)) {
+      const interval = (Number(this.config.refresh_seconds) || 300) * 1000;
+      const left = Math.max(0, polledAt + interval - Date.now());
+      const minutes = Math.floor(left / 60000);
+      const seconds = Math.floor((left % 60000) / 1000);
+      text = left > 0
+        ? `Refreshing in ${minutes}:${String(seconds).padStart(2, "0")}`
+        : "Refreshing…";
+    }
+    if (Date.now() < (this._pendingUntil || 0)) {
+      text = "Refreshing…";
+    }
+    const html = `
+      <style>
+        :host { display: block; cursor: pointer; }
+        ha-card { transition: opacity .15s ease; }
+        ha-card:hover { opacity: .92; }
+        /* centred, and only as wide as its own text */
+        ha-card { display: flex; justify-content: center; align-items: center;
+                  gap: 8px; width: fit-content; margin: 0 auto;
+                  padding: 5px 14px; font-size: 12px;
+                  color: var(--secondary-text-color);
+                  background: color-mix(in srgb, var(--card-background-color) 80%, transparent);
+                  border-radius: 999px; box-shadow: none; border: none;
+                  backdrop-filter: blur(6px); }
+        .dot { width: 7px; height: 7px; border-radius: 50%;
+               background: var(--line-amber, #f0b429); opacity: .8; }
+      </style>
+      <ha-card title="Click to refresh now"><span class="dot"></span><span>${text}</span></ha-card>`;
+    if (html !== this._html) {
+      this._html = html;
+      this.shadowRoot.innerHTML = html;
+    }
+  }
+}
+
+customElements.define("llm-subscription-refresh-badge", SubscriptionRefreshBadge);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "llm-subscription-limit-card",
   name: "LLM subscription limit",
   description: "Usage history and projected subscription limits",
+  documentationURL: "https://github.com/y-decimal/ha-llm-subscription-limit-card",
+});
+window.customCards.push({
+  type: "llm-subscription-refresh-badge",
+  name: "Subscription refresh badge",
+  description: "Shows when the usage sensors poll next; click to refresh now",
   documentationURL: "https://github.com/y-decimal/ha-llm-subscription-limit-card",
 });

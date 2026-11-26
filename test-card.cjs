@@ -62,4 +62,18 @@ assert.match(svg, /stroke-dasharray="2 4"/);
 assert.match(svg, /fill-opacity="0.05"/);
 assert.match(svg, /fill="url\(#estimated-usage-hatch\)" opacity="0.55"/);
 assert.match(svg, /stroke="var\(--line-usage\)" stroke-width="1" stroke-dasharray="4 4" opacity="0.55"/);
+
+const Badge = registry.get("llm-subscription-refresh-badge");
+assert.ok(Badge, "refresh badge element must be registered");
+assert.deepEqual(
+  Array.from(Badge.getConfigForm().schema, (field) => field.name),
+  ["entity", "refresh_seconds", "targets"]
+);
+assert.equal(Badge.getStubConfig(hass, ["sensor.go"], []).entity, "sensor.go");
+assert.equal(context.window.customCards[1].type, "llm-subscription-refresh-badge");
+const badge = Object.create(Badge.prototype);
+badge.config = { entity: "sensor.go", refresh_seconds: 300 };
+assert.equal(JSON.stringify(badge.targets), '["sensor.go"]', "targets default to the anchor entity");
+badge.config = { entity: "sensor.go", targets: ["sensor.a", "sensor.b"] };
+assert.equal(JSON.stringify(badge.targets), '["sensor.a","sensor.b"]');
 console.log("Card registration and visual form smoke tests passed");
